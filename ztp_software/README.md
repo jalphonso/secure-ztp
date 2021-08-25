@@ -1,0 +1,1 @@
+place junos software images in this directory

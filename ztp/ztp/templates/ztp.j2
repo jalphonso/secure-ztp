@@ -1,0 +1,163 @@
+#!/bin/sh
+set -x
+
+HOME="/var/tmp"
+command -v mktemp
+if [ $? -eq 0 ]; then
+    JUNOS_TMPDIR=$(mktemp -d -u /var/tmp/ztp-$(date +%Y-%m-%d-%H-%M-%S)-XXXXXXXX)
+else
+    JUNOS_TMPDIR="/var/tmp/ztp-$(date +%Y-%m-%d-%H-%M-%S)"
+fi
+mkdir $JUNOS_TMPDIR
+if [ ! -d $JUNOS_TMPDIR ]; then
+    logger -t ztp "Unable to create TMPDIR"
+    exit 1
+fi
+cd $JUNOS_TMPDIR
+
+cleanup () {
+    logger -t ztp "Cleaning up..."
+    cd
+    rm -rf $JUNOS_TMPDIR
+}
+
+exit_script() {
+    logger -t ztp "Received SIGINT or SIGTERM"
+    cleanup
+    trap - SIGINT SIGTERM
+    kill -- -$$
+    exit 1
+}
+
+trap exit_script SIGINT SIGTERM
+
+logger -t ztp "Starting ZTP..."
+
+SERIAL=$(echo "show system information | display xml" | cli | grep serial-number | awk -F">" '{print $2}' | awk -F"<" '{print $1}')
+MODEL=$(echo "show system information | display xml" | cli | grep hardware-model | awk -F">" '{print $2}' | awk -F"<" '{print $1}')
+HOSTNAME=$(echo "show system information | display xml" | cli | grep host-name | awk -F">" '{print $2}' | awk -F"<" '{print $1}')
+MGMT_INTF=$(cli -c "show dhcp client binding | no-more" | grep -i "bound" | grep -Eo -m 1 "(vme|em0|me0|fxp0)\.[0-9]+")
+MGMT_MAC=$(cli -c "show dhcp client binding | no-more" | grep -i "bound" | grep -E -m 1 "(vme|em0|me0|fxp0)\.[0-9]+"| awk -F" " '{print $2}')
+VERSION=$(echo "show system information | display xml" | cli | grep os-version | awk -F">" '{print $2}' | awk -F"<" '{print $1}')
+
+if [ -z $SERIAL ]; then
+    logger -t ztp "Could not retrieve device serial number"
+    cleanup
+    exit 1
+fi
+
+if [ -z $MGMT_MAC ]; then
+    logger -t ztp "Could not retrieve ztp interface mac address"
+    cleanup
+    exit 1
+fi
+
+if [ -z $HOSTNAME ]; then
+    logger -t ztp "Could not retrieve device hostname"
+    cleanup
+    exit 1
+fi
+
+if [ -z $VERSION ]; then
+    logger -t ztp "Could not retrieve device software version"
+    cleanup
+    exit 1
+fi
+
+DATA=$(cat <<EOF
+{
+  "serial":"$SERIAL",
+  "mac":"$MGMT_MAC",
+  "hostname":"$HOSTNAME",
+  "version":"$VERSION"
+}
+EOF
+)
+
+logger -t ztp "Checking to see if software upgrade/downgrade is needed"
+
+STATUS_CODE=$(curl -D http_resp_raw -OJfsS -w "%{http_code}\n" -k -d "$DATA" -H 'Content-Type: application/json' https://{{ztp_server}}:{{ztp_port}}/software)
+if [ ! -f http_resp_raw ]; then
+    logger -t ztp "http_resp_raw not found"
+    cleanup
+    exit 1
+fi
+
+tr -d '\r' < http_resp_raw > http_resp || cp -f http_resp_raw http_resp
+
+if [ $STATUS_CODE -eq 204 ]; then
+    MSG=$(grep -i software-message http_resp | awk -F ': ' '{print $2}')
+    logger -t ztp "$MSG"
+elif [ $STATUS_CODE -eq 200 ]; then
+    NEW_VERSION=$(grep -i software-version http_resp | awk -F ': ' '{print $2}')
+    JUNOS_FILENAME=$(grep -i content-disposition http_resp | awk -F 'filename=' '{print $2}')
+    logger -t ztp "Current software version is $VERSION. New Version $NEW_VERSION will be installed."
+    logger -t ztp "Performing checksum on $JUNOS_FILENAME"
+    HTTP_MD5=$(grep -i content-md5 http_resp | awk -F ': ' '{print $2}')
+    FILE_MD5=$(md5 -q $JUNOS_FILENAME)
+
+    if [ $HTTP_MD5 != $FILE_MD5 ]; then
+        logger -t ztp "Software MD5 does not match expected value"
+        cleanup
+        exit 1
+    fi
+    logger -t ztp "Software MD5 checksum verified"
+    logger -t ztp "Loading software image $NEW_VERSION ..."
+    CLI_RESP=$(cli -c "request system software add $JUNOS_TMPDIR/$JUNOS_FILENAME no-validate")
+    CLI_RESP_ERRS=$(echo $CLI_RESP | grep 'error')
+    if [ $? -eq 0 ]; then
+        echo $CLI_RESP
+        logger -t ztp "failed to install software"
+        cleanup
+        exit 1
+    fi
+    logger -t ztp "Successfully loaded software image $NEW_VERSION ..."
+    logger -t ztp "Preparing to reboot to finish software upgrade"
+    logger -t ztp "ZTP will start again afterwards to obtain the device config"
+    cleanup
+    cli -c "request system reboot at now"
+    exit 1
+else
+    logger -t ztp "Failed to retrieve software"
+    cleanup
+    exit 1
+fi
+
+
+logger -t ztp "Requesting config from ztp server..."
+STATUS_CODE=$(curl -D http_resp_raw -OJfsS -w "%{http_code}\n" -k -d "$DATA" -H 'Content-Type: application/json' https://{{ztp_server}}:{{ztp_port}}/config)
+if [ ! -f http_resp_raw ]; then
+    logger -t ztp "http_resp_raw not found"
+    cleanup
+    exit 1
+fi
+
+tr -d '\r' < http_resp_raw > http_resp || cp -f http_resp_raw http_resp
+
+if [ $STATUS_CODE -eq 204 ]; then
+    MSG=$(grep -i config-message http_resp | awk -F ': ' '{print $2}')
+    logger -t ztp "$MSG"
+elif [ $STATUS_CODE -eq 200 ]; then
+    JUNOS_CONFIG=$(grep -i content-disposition http_resp | awk -F 'filename=' '{print $2}')
+    if [ -z $JUNOS_CONFIG ]; then
+        logger -t ztp "Could not retrieve config filename"
+        cleanup
+        exit 1
+    fi
+    logger -t ztp "Config successfully retrieved"
+    logger -t ztp "Preparing to load and commit configuration..."
+    CLI_RESP=$(cli -c "configure exclusive; load override $JUNOS_TMPDIR/$JUNOS_CONFIG; commit and-quit")
+    CLI_RESP_GREP=$(echo $CLI_RESP | grep 'configuration check succeeds commit complete')
+    if [ $? -ne 0 ]; then
+        logger -t ztp "Failed to commit configuration"
+        cleanup
+        exit 1
+    fi
+    logger -t ztp "Configuration successfully applied"
+else
+    logger -t ztp "Failed to retrieve config"
+    cleanup
+    exit 1
+fi
+cleanup
+logger -t ztp "ZTP script completed without error. The auto-image-upgrade process will stop now."

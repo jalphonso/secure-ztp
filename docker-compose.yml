@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+
+  web:
+    container_name: web
+    image: nginx:1.19.10
+    volumes:
+      - ./ztp_software:/usr/share/nginx/html/ztp_software:ro
+      - ./ztp_configs:/usr/share/nginx/html/ztp_configs:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/conf/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf/conf.d/local.conf:/etc/nginx/conf.d/local.conf:ro
+    ports:
+      - "8443:443"
+    networks:
+      - ztp
+    restart: always
+
+  app:
+    container_name: app
+    build:
+      context: ztp
+    image: flask-ztp:1.2
+    volumes:
+      - ./ztp.env:/home/ztp/ztp.env:ro
+      - ./ztp_jsons:/home/ztp/ztp_jsons:ro
+    env_file:
+      - ztp.env
+    command: >
+             gunicorn --workers 5 --bind :5000
+                      --worker-tmp-dir /dev/shm
+                      wsgi:app
+    networks:
+      - ztp
+    restart: always
+
+networks:
+  ztp:
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.30.10.0/24"

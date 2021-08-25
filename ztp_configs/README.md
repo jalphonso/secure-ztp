@@ -1,0 +1,1 @@
+place junos ztp configs in this directory
