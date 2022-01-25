@@ -4,18 +4,15 @@ LABEL description "ztp automation"
 LABEL maintainer="Joe Alphonso <jalphonso@juniper.net>" \
       version="1.2"
 
-RUN useradd -m ztp
-USER ztp
-WORKDIR /home/ztp
-
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
+WORKDIR /root
 
-ENV PATH="/home/ztp/.local/bin:${PATH}"
+ENV PATH="/root/.local/bin:${PATH}"
 
-COPY --chown=ztp:ztp requirements.txt .
+COPY requirements.txt .
 RUN pip install --user -r requirements.txt
-COPY --chown=ztp:ztp ztp .
+COPY ztp .
 
 EXPOSE 5000
 

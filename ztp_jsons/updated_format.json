@@ -1,0 +1,11 @@
+{
+  "ABCF5A9B123F": {
+    "bypass_software": false,
+    "bypass_config": false,
+    "hostname": "vmx1",
+    "config_file": "testing.conf",
+    "version": "19.4R3-S1.3",
+    "junos_file": "software-test.txt",
+    "md5": "de01b65097d74928159b30b89ba37f0b"
+  }
+}

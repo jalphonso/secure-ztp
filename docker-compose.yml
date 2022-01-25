@@ -21,10 +21,10 @@ services:
     container_name: app
     build:
       context: ztp
-    image: flask-ztp:1.2
+    image: flask-ztp:1.3
     volumes:
-      - ./ztp.env:/home/ztp/ztp.env:ro
-      - ./ztp_jsons:/home/ztp/ztp_jsons:ro
+      - ./ztp.env:/root/ztp.env:ro
+      - ./ztp_jsons:/root/ztp_jsons:ro
     env_file:
       - ztp.env
     command: >

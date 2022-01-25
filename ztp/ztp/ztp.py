@@ -15,44 +15,18 @@ for json_file in data_dir.glob('*.json'):
         config_dict |= json.load(f)
 
 
-def get_client_ip(request):
-    status = None
-    client_ip = request.headers['X-Forwarded-For']
-    if not client_ip:
-        print("Client IP could not be determined.")
-        status = 400
-    if client_ip not in config_dict.keys():
-        print(f"ip: {client_ip} is not an authorized ztp host")
-        status = 401
-    return client_ip, status
-
-
 def auth_ztp_host(request):
-    client_ip, err_resp = get_client_ip(request)
-    if err_resp:
-        return err_resp
-
     try:
         print(request.json)
         sn = request.json['serial']
-        mac = request.json['mac']
-        hostname = request.json['hostname']
 
-        if config_dict[client_ip]['hostname'] != hostname:
-            print(f"hostname: {hostname} does not match expected value for ip {client_ip}")
-            return 401
-
-        if config_dict[client_ip]['serial'] != sn:
-            print(f"sn: {sn} does not match expected value for ip {client_ip}")
-            return 401
-
-        if config_dict[client_ip]['mac'] != mac:
-            print(f"mac: {mac} does not match expected value for ip {client_ip}")
+        if config_dict['serial'] != sn:
+            print(f"sn: {sn} is not known")
             return 401
 
         return 200
     except KeyError:
-        print("Did you provide all the required json fields?")
+        print("Did you provide the serial number in the json request body?")
         return 400
     except Exception as e:
         print(e)
@@ -65,26 +39,26 @@ def software():
     if status != 200:
         return Response(status=status)
 
-    client_ip = request.headers['X-Forwarded-For']
+    sn = request.json['serial']
     try:
         version = request.json['version']
-        if config_dict[client_ip]['bypass_software']:
+        if config_dict[sn]['bypass_software']:
             response = Response(status=204)
             response.headers['Software-Message']='Software upgrade bypass enabled'
-            print(f"Software upgrade bypass enabled for host: {client_ip}")
+            print(f"Software upgrade bypass enabled for host serial: {sn}")
             return response
 
-        if config_dict[client_ip]['version'] == version:
+        if config_dict[sn]['version'] == version:
             response = Response(status=204)
             response.headers['Software-Message']=f"Software already up to date. Version is {version}"
-            print(f"Software upgrade not needed. version matches. host: {client_ip} sw ver: {version}")
+            print(f"Software upgrade not needed. version matches. host serial: {sn} sw ver: {version}")
             return response
 
         response = Response(status=301)
-        response.content_md5 = config_dict[client_ip]['md5']
-        response.headers['Software-Version']=config_dict[client_ip]['version']
-        response.headers['Content-Disposition']=f"attachment; filename={config_dict[client_ip]['junos_file']}"
-        response.headers['X-Accel-Redirect']=f"/ztp_software/{config_dict[client_ip]['junos_file']}"
+        response.content_md5 = config_dict[sn]['md5']
+        response.headers['Software-Version']=config_dict[sn]['version']
+        response.headers['Content-Disposition']=f"attachment; filename={config_dict[sn]['junos_file']}"
+        response.headers['X-Accel-Redirect']=f"/ztp_software/{config_dict[sn]['junos_file']}"
         return response
     except KeyError:
         print("Did you provide all the required json fields?")
@@ -100,17 +74,17 @@ def config():
     if status != 200:
         return Response(status=status)
 
-    client_ip = request.headers['X-Forwarded-For']
+    sn = request.json['serial']
     try:
-        if config_dict[client_ip]['bypass_config']:
+        if config_dict[sn]['bypass_config']:
             response = Response(status=204)
             response.headers['Config-Message']='Configuration bypass enabled'
-            print(f"Configuration bypass enabled for host: {client_ip}")
+            print(f"Configuration bypass enabled for host serial: {sn}")
             return response
 
         response = Response(status=301)
-        response.headers['Content-Disposition']=f"attachment; filename={config_dict[client_ip]['config_file']}"
-        response.headers['X-Accel-Redirect']=f"/ztp_configs/{config_dict[client_ip]['config_file']}"
+        response.headers['Content-Disposition']=f"attachment; filename={config_dict[sn]['config_file']}"
+        response.headers['X-Accel-Redirect']=f"/ztp_configs/{config_dict[sn]['config_file']}"
         return response
     except KeyError:
         print("Did you provide all the required json fields?")
@@ -122,15 +96,6 @@ def config():
 
 @app.route('/ztp.sh', methods=['GET'])
 def send_ztp_script():
-    client_ip, err_resp = get_client_ip(request)
-    if err_resp:
-        return Response(status=err_resp)
-    try:
-        hostname = config_dict[client_ip]['hostname']
-    except KeyError:
-        print(f"missing hostname in config data dictionary for ip {client_ip}")
-        return Response(status=400)
-
     # MANDATORY ENV vars need to be passed in to container runtime
     context = {
         'ztp_server': os.getenv('ZTP_SERVER'),
