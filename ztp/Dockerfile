@@ -2,7 +2,7 @@ FROM python:3.9.5-slim-buster
 LABEL net.juniper.vendor "Juniper Networks"
 LABEL description "ztp automation"
 LABEL maintainer="Joe Alphonso <jalphonso@juniper.net>" \
-      version="1.2"
+      version="1.3"
 
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
