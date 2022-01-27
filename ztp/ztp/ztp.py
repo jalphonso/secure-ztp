@@ -20,7 +20,7 @@ def auth_ztp_host(request):
         print(request.json)
         sn = request.json['serial']
 
-        if config_dict['serial'] != sn:
+        if sn not in config_dict:
             print(f"sn: {sn} is not known")
             return 401
 
